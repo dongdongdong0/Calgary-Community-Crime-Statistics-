@@ -1,0 +1,1075 @@
+---
+title: "604 Group MLR"
+author: "Jianling Xie, Alan Cheun, Zane Wu"
+date: "2024-03-27"
+output: html_document
+editor_options: 
+  markdown: 
+    wrap: 72
+---
+
+# Introduction
+
+Modelling Plan We will first run a First order linear regression model
+using all predictors and test the variables for multicollinearity. Once
+we have removed the variables with high multicollinearity, we will use
+step-wise regression to select a model of main effects. We will then
+perform a partial F-test to compare the full model and reduced model.
+Once we decide the main effects, we will use the individual t-test to
+check for significant higher-order terms and interactions. Then we test
+this model with another F-test to evaluate if the higher order terms and
+interactions are significant. Any significant higher-order or
+interaction terms will be added to the main effects to produce the final
+model. Our model will then test for the following 6 assumptions
+
+1.  Linearity Assumption - Review residual plots
+2.  Independence Assumption - Review residual against year (time)
+3.  Normality Assumption - Using Shapiro-Wilk normality test
+4.  Equal Variance Assumption (heteroscedasticity) - Using Breusch-Pagan
+    test
+5.  Multicollinearity- Using Variance Inflation Factors
+6.  Outliers - check Cook's distance and leverage
+
+Finally, we may use the final model to do a prediction of crime at a
+specific future c-train station
+
+dependent variable: crime_rate ln_crime_rate Total_Crime_Count
+
+independent variables: Year Sectors SHORTEST_DISTANCE_TO_LRT_METERS
+SHORTEST_DISTANCE_TO_POLICE_METERS male_percentage_num
+age_75_plus_percentage_num TotalPermits
+calgary_cma_average_hourly_wage_rate_num median
+canada_unemployment_rate_num
+
+```{r}
+
+library(car)
+library(lmtest)
+library(olsrr)
+library(Ecdat)
+library(MASS)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(mctest)
+library(pastecs)
+library(psych)
+library(ggplot2)
+
+```
+
+# Dataset
+
+Our dataset is sourced from The City of Calgary’s Open Data Portal. It
+is the outcome of our DATA604 project to analyze Calgary Crime
+Statistics.
+
+License:
+<https://data.calgary.ca/stories/s/Open-Calgary-Terms-of-Use/u45n-7awa>
+
+```{r}
+
+data <- read.csv("https://raw.githubusercontent.com/ANPC86/D603/main/crime_statistics.csv")
+
+#data <- read.csv("C:/Users/jianl/Downloads/603 datasets/final dataset/603 crime dataset April 2 2024.csv")
+
+str(data)
+
+
+
+```
+
+```{r}
+data$CLASS_CODE.f = as.factor(data$CLASS_CODE)
+
+## create dependent variables: crime rate and log of crime rate
+data<- data %>%
+  mutate(
+    crime_rate = Total_Crime_Count / Avg_Resident_Count * 100000,
+    ln_crime_rate = log(crime_rate)
+  )
+
+```
+
+```{r}
+table (data$CLASS_CODE.f) # cell count for level-2 (industry) was low, it may cause problem, so decided not to include it to the model
+
+table (data$Sectors) # OK
+
+```
+
+## Check Dataset for Missing Values
+
+Check for missing values - 25\~30 with missing data
+
+```{r}
+missing_values <- colSums(is.na(data))
+
+missing_values
+
+```
+
+Using complete case analysis
+
+```{r}
+
+# Select variables and create a new dataset without missing data
+
+data_selected <- data[, c("id",
+                          "Year",
+                          "Community_Name",	
+                          "COMM_CODE",
+                          "crime_rate",
+                          "ln_crime_rate",
+                          "Total_Crime_Count", 
+                          "Avg_Resident_Count",
+                          "Sectors", 
+                          "SHORTEST_DISTANCE_TO_LRT_METERS", 
+                           "SHORTEST_DISTANCE_TO_POLICE_METERS", "male_percentage", 
+                           "age_75_plus_percentage", 
+                           "TotalPermits", 
+                           "calgary_cma_average_hourly_wage_rate", 
+                           "property_assessment_median", 
+                           "CLASS_CODE.f",
+                           "calgary_cer_unemployment_rate",
+                          "canada_unemployment_rate")]
+
+ #Remove rows with missing values
+data_complete <- na.omit(data_selected)
+
+#Print the new dataset
+str(data_complete)
+```
+
+## Test Distribution of the Dependent Variable - Crime Rate
+
+Check the distribution of the dependent variable crime rate. The crime
+rate was highly right-skewed, and applying a log transformation helped
+approximate a normal distribution.
+
+```{r}
+
+par(mfrow = c(1, 2))
+hist(data_complete$crime_rate, main='Crime rate', xlab='rate/100,000')
+hist(data_complete$ln_crime_rate,main='LN (crime rate)', xlab='rate/100,000') 
+par(mfrow = c(1, 1))
+
+describe(data_complete$ln_crime_rate)
+
+```
+
+# Fit the Additive Model 1
+
+Fit the full model with all candidate variables, and check for
+multicollinearity
+
+```{r}
+
+model1 <- lm(ln_crime_rate ~ 
+Year+
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+calgary_cma_average_hourly_wage_rate+
+property_assessment_median+
+canada_unemployment_rate, data_complete)
+
+summary(model1)
+
+
+```
+
+## Check Model 1 for MultiCollinearity
+
+```{r}
+imcdiag(model1, method="VIF")
+```
+
+The variable "calgary_cma_average_hourly_wage_rate_num" has
+VIF=37.604408, p = 0.00479 The variable "Year" had VIF=38.994258,
+p=5.15e-05. So, we dropped variable
+"calgary_cma_average_hourly_wage_rate_num", re-run the reduced model,
+and test for multicollinearity again
+
+# Fit Reduced Model 2
+
+```{r}
+
+model2 <- lm(ln_crime_rate ~ 
+Year+
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate, data_complete)
+
+summary(model2)
+
+
+```
+
+## Check Model 2 for MultiCollinearity
+
+```{r}
+imcdiag(mod = model2, method = "VIF")
+
+```
+
+In model2, all VIF's \< 5.0, suggesting moderate collinearity, but it is
+not severe enough to warrant corrective measures.
+
+Although we planned to use step-wise for selecting variables, but it is
+not necessary at this point, as in model2, the individual t-test for all
+the candidate variables had p\<0.05.
+
+# Fit Interaction Model
+
+## Fit Interaction Model 3
+
+So we move onto testing all possible two way interactions:
+
+```{r}
+
+model3 <- lm(ln_crime_rate ~ 
+(Year+
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate)^2, data_complete)
+
+summary(model3)
+
+
+```
+
+Evaluate interaction terms significance using individual t-test.
+
+$H_0$: 𝛽$_i$ = 0 $H_a$: 𝛽$_i \neq$ 0 $\alpha=0.05$
+
+The following interaction terms had p\<0.05:
+
+Year:male_percentage_num 2.413 0.015997 \*\
+Year:TotalPermits 5.620 2.41e-08 ***Year:canada_unemployment_rate_num
+-2.091 0.036737*** **\
+SectorsEAST:SHORTEST_DISTANCE_TO_LRT_METERS -3.098 0.001995**
+SectorsNORTH:SHORTEST_DISTANCE_TO_LRT_METERS 1.966 0.049571 \*\
+SectorsSOUTH:SHORTEST_DISTANCE_TO_LRT_METERS -2.853 0.004406 \*\*
+SectorsSOUTHEAST:SHORTEST_DISTANCE_TO_LRT_METERS 2.134 0.033069 \*\
+SectorsWEST:SHORTEST_DISTANCE_TO_LRT_METERS 4.588 4.99e-06
+***SectorsEAST:SHORTEST_DISTANCE_TO_POLICE_METERS 2.662 0.007884**
+SectorsSOUTH:SHORTEST_DISTANCE_TO_POLICE_METERS 1.964 0.049782*\
+SectorsWEST:SHORTEST_DISTANCE_TO_POLICE_METERS -3.185 0.001489 \*\*
+SectorsNORTH:male_percentage_num -3.817 0.000143
+***SectorsNORTHEAST:male_percentage_num -2.897 0.003840**
+SectorsSOUTH:male_percentage_num 1.982 0.047713*\
+SectorsNORTHEAST:age_75_plus_percentage_num 2.505 0.012370 \*\
+SectorsSOUTHEAST:age_75_plus_percentage_num 4.931 9.42e-07
+***SectorsNORTH:TotalPermits -3.043 0.002396**
+SectorsNORTHEAST:TotalPermits -4.637 3.95e-06*
+**SectorsNORTHWEST:TotalPermits 3.595 0.000339**
+*SectorsSOUTHEAST:TotalPermits -3.979 7.37e-05*
+**SectorsNORTHWEST:median 4.215 2.70e-05** *SectorsSOUTH:median 5.711
+1.44e-08* **SectorsSOUTHEAST:median 3.244 0.001214**
+SHORTEST_DISTANCE_TO_LRT_METERS:SHORTEST_DISTANCE_TO_POLICE_METERS 2.026
+0.043004 \*\
+SHORTEST_DISTANCE_TO_LRT_METERS:male_percentage_num 3.571 0.000371
+***SHORTEST_DISTANCE_TO_LRT_METERS:age_75_plus_percentage_num 3.063
+0.002245** SHORTEST_DISTANCE_TO_LRT_METERS:TotalPermits 2.553 0.010821*\
+SHORTEST_DISTANCE_TO_POLICE_METERS:median -2.096 0.036288 \*\
+male_percentage_num:age_75_plus_percentage_num -3.287 0.001045 \*\*
+male_percentage_num:median -3.384 0.000740 \*\*
+*median:canada_unemployment_rate_num 2.062 0.039430*
+
+We will include these interaction terms in the model:
+
+Year*male_percentage_num+\
+Year*TotalPermits+\
+Year*canada_unemployment_rate_num+\
+Sectors*SHORTEST_DISTANCE_TO_LRT_METERS+\
+Sectors*SHORTEST_DISTANCE_TO_POLICE_METERS+\
+Sectors*male_percentage_num+\
+Sectors*age_75_plus_percentage_num+\
+Sectors*TotalPermits+\
+Sectors*median+\
+SHORTEST_DISTANCE_TO_LRT_METERS*SHORTEST_DISTANCE_TO_POLICE_METERS+\
+SHORTEST_DISTANCE_TO_LRT_METERS*male_percentage_num+\
+SHORTEST_DISTANCE_TO_LRT_METERS*age_75_plus_percentage_num+\
+SHORTEST_DISTANCE_TO_LRT_METERS*TotalPermits+\
+SHORTEST_DISTANCE_TO_POLICE_METERS*median+\
+male_percentage_num*age_75_plus_percentage_num+\
+male_percentage_num*median+\
+median\*canada_unemployment_rate_num
+
+## Fit Interaction Model 4
+
+Then we run the model with the interaction terms:
+
+```{r}
+model4 <- lm(ln_crime_rate ~ 
+Year+
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate +
+Year*male_percentage+                                            
+Year*TotalPermits+                                                   
+Year*canada_unemployment_rate +                                   
+Sectors*SHORTEST_DISTANCE_TO_LRT_METERS+                         
+Sectors*SHORTEST_DISTANCE_TO_POLICE_METERS+                      
+Sectors*male_percentage +                                    
+Sectors*age_75_plus_percentage+                         
+Sectors*TotalPermits+                                           
+Sectors*property_assessment_median+                                             
+SHORTEST_DISTANCE_TO_LRT_METERS*SHORTEST_DISTANCE_TO_POLICE_METERS+   
+SHORTEST_DISTANCE_TO_LRT_METERS*male_percentage+                  
+SHORTEST_DISTANCE_TO_LRT_METERS*age_75_plus_percentage+           
+SHORTEST_DISTANCE_TO_LRT_METERS*TotalPermits+                         
+SHORTEST_DISTANCE_TO_POLICE_METERS*property_assessment_median+                           
+male_percentage*age_75_plus_percentage+                      
+male_percentage*property_assessment_median+                                          
+property_assessment_median*canada_unemployment_rate   
+  , data_complete)
+
+
+summary(model4)
+
+```
+
+### Fit Interaction Model 4b
+
+Dropped the interaction terms had p\>0.05.
+property_assessment_median:canada_unemployment_rate with t=1.528,
+P=0.126833
+
+```{r}
+
+model4b <- lm(ln_crime_rate ~ 
+Year+
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate+
+Year*male_percentage+                                            
+Year*TotalPermits+                                                   
+Sectors*SHORTEST_DISTANCE_TO_LRT_METERS+                         
+Sectors*SHORTEST_DISTANCE_TO_POLICE_METERS+                      
+Sectors*male_percentage+                                    
+Sectors*age_75_plus_percentage+                         
+Sectors*TotalPermits+                                           
+Sectors*property_assessment_median+                                             
+SHORTEST_DISTANCE_TO_LRT_METERS*SHORTEST_DISTANCE_TO_POLICE_METERS+   
+SHORTEST_DISTANCE_TO_LRT_METERS*male_percentage+                  
+SHORTEST_DISTANCE_TO_LRT_METERS*age_75_plus_percentage+           
+SHORTEST_DISTANCE_TO_LRT_METERS*TotalPermits+                         
+SHORTEST_DISTANCE_TO_POLICE_METERS*property_assessment_median+                           
+male_percentage*age_75_plus_percentage+                      
+male_percentage*property_assessment_median, data_complete)
+
+
+summary(model4b)
+
+```
+
+# Fit Higher Order Term Model
+
+Next we move on to testing higher order terms. We use the function
+pairs() to see how the response looks with respect to each independent
+variable. We look at all pairwise combinations of continuous variables
+in scatterplots.
+
+## Plot Pairs
+
+```{r}
+pairs(~ln_crime_rate +
+Year+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate, data_complete, panel=panel.smooth)
+
+
+
+```
+
+It looked like there might be some concavity in the
+
+ln_crime_rate vs. Year, ln_crime_rate vs.SHORTEST_DISTANCE_TO_LRT_METERS
+ln_crime_rate vs.SHORTEST_DISTANCE_TO_POLICE_METERS
+
+### Fit Quadratic Model 5 - Year Squared
+
+We fitted a quadratic model and the linear model and see which one might
+be the best fit.
+
+```{r}
+
+model5 <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+  
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate, data_complete)
+
+summary(model5)
+```
+
+### Fit Cubic Model 5b - Year Squared and Year Cubed
+
+```{r}
+model5b <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+
+I(Year^3)+    
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate, data_complete)
+
+summary(model5b)
+```
+
+### Fit Quadratic Model 5c - Year Squared and Shortest Distance to LRT Squared
+
+```{r}
+
+model5c <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^2)+  
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate, data_complete)
+
+summary(model5c)
+
+ 
+```
+
+### Fit Cubic Model 5d - Shorest Distance to LRT Squared and Cubed
+
+```{r}
+model5d <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^2)+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^3)+   
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate, data_complete)
+
+summary(model5d)
+```
+
+### Fit Quartic Model 5e - Shortest Distance to LRT Squared to Power of 4
+
+I(SHORTEST_DISTANCE_TO_LRT_METERS\^4) not significant
+
+```{r}
+model5e <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^2)+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^3)+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^4)+   
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate, data_complete)
+
+summary(model5e)
+```
+
+### Fit Cubic Model 6 - Shortest Distance to LRT Squared and Cubed + Interaction Terms
+
+Then we fit a cubic model plus the interaction terms.
+
+```{r}
+
+model6 <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+  
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^2)+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^3)+   
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate+
+Year*male_percentage+                                            
+Year*TotalPermits+                                                   
+Sectors*SHORTEST_DISTANCE_TO_LRT_METERS+                         
+Sectors*SHORTEST_DISTANCE_TO_POLICE_METERS+                      
+Sectors*male_percentage+                                    
+Sectors*age_75_plus_percentage+                         
+Sectors*TotalPermits+                                           
+Sectors*property_assessment_median+                                             
+SHORTEST_DISTANCE_TO_LRT_METERS*SHORTEST_DISTANCE_TO_POLICE_METERS+   
+SHORTEST_DISTANCE_TO_LRT_METERS*male_percentage+                  
+SHORTEST_DISTANCE_TO_LRT_METERS*age_75_plus_percentage+           
+SHORTEST_DISTANCE_TO_LRT_METERS*TotalPermits+                         
+SHORTEST_DISTANCE_TO_POLICE_METERS*property_assessment_median+                           
+male_percentage*age_75_plus_percentage+                      
+male_percentage*property_assessment_median, data_complete)
+
+summary(model6)
+
+
+
+```
+
+## Fit Model 6b
+
+Dropped
+interaction:SHORTEST_DISTANCE_TO_LRT_METERS\*SHORTEST_DISTANCE_TO_POLICE_METERS
+
+```{r}
+model6b <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+  
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^2)+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^3)+   
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate+
+Year*male_percentage+                                            
+Year*TotalPermits+                                                   
+Sectors*SHORTEST_DISTANCE_TO_LRT_METERS+                         
+Sectors*SHORTEST_DISTANCE_TO_POLICE_METERS+                      
+Sectors*male_percentage+                                    
+Sectors*age_75_plus_percentage+                         
+Sectors*TotalPermits+                                           
+Sectors*property_assessment_median+                                             
+SHORTEST_DISTANCE_TO_LRT_METERS*male_percentage+                  
+SHORTEST_DISTANCE_TO_LRT_METERS*age_75_plus_percentage+           
+SHORTEST_DISTANCE_TO_LRT_METERS*TotalPermits+                         
+SHORTEST_DISTANCE_TO_POLICE_METERS*property_assessment_median+                           
+male_percentage*age_75_plus_percentage+                      
+male_percentage*property_assessment_median, data_complete)
+
+summary(model6b)
+```
+
+# Analysis of Variance (ANOVA)
+
+## ANOVA - Model 6((main effect+interaction+higherorder and the insignificant interaction) vs Model 6b(main effect+interaction+higher order)
+
+```{r}
+anova(model6, model6b)
+AIC(model6)
+AIC(model6b)
+```
+
+## ANOVA - Model 6b(main effect+interaction+higher order) vs Model 4b (main effect+interaction)
+
+```{r}
+
+anova(model6b, model4b)
+AIC(model6b)
+AIC(model4b)
+
+```
+
+The higher order term and the interaction terms were all significant at
+alpha=0.05. This model 6b would be the final additive model. We then run
+a F-test for comparing model2 vs model6b.
+
+## ANOVA - Model2 (main effect only) vs Model 6b (main effect + interaction+ higer order)
+
+```{r}
+
+anova (model2, model6b)
+
+```
+
+Model6b would be the final additive model.
+
+# Check Model Assumptions
+
+Next we will check model assumptions:
+
+## Linearity Assumption
+
+1.  Linearity Assumption - Review residual plots (histogram and residual
+    vs. fitted values)
+
+The residual plots shows no discernible pattern.
+
+```{r}
+plot(model6b, which=1)
+hist(model6b$residual, breaks=25)
+
+```
+
+## Independence Assumption
+
+2.  Independence Assumption - Review residual against year (time), and
+    residual against year spatial variable (sectors)
+
+```{r}
+plot(data_complete$Year, model6b$residual, 
+     xlab="Year of assessment") ## no discernible pattern over years?
+
+boxplot(model6b$residual ~ data_complete$Sectors, 
+        xlab="Sector") ## no discernible pattern across sectors?
+
+boxplot(model6b$residual ~ data_complete$Year, 
+        xlab="Year") 
+
+
+
+```
+
+## Normality Assumption
+
+3.  Normality Assumption - Using Shapiro-Wilk normality test; and normal
+    qq plot, and histogram of residual
+
+```{r}
+hist(model6b$residual, breaks=25)
+
+plot(model6b, which=2) ## deviation at the tails 
+
+shapiro.test(residuals(model6b)) 
+# we have a large sample, small deviation will likely result in rejecting the null
+# hypothesis, but by the visual assessment of the QQ plot, it was not very
+# far off, we consider our model is valid in terms of the normality assumption.
+
+```
+
+## Equal Variance Assumption
+
+4.  Equal Variance Assumption (heteroscedasticity) - Using Breusch-Pagan
+    test residual vs. fitted value plots
+
+```{r}
+
+
+plot(model6b, which=1)
+
+plot(model6b, which=3) ## the scale location plot showed a bit of the variation of residuals decreases as fitted value increased; the line was quite horizontal straight. 
+
+
+bptest(model6) ## p<0.05 
+
+# we have a large sample, small deviation will likely result in rejecting the null
+# hypothesis, but by the visual assessment of the scale location plot, 
+# it was horizontal and was not very far off, but we can see that there were 
+# less data points that have the high fitted values, and that is probably where 
+# the BP test detected the deviation. But by the visual assessment of the scale 
+# location plot we did not see any megaphone shape signaling unequal variance,
+# thus we consider our model is valid in terms of equal variance assumption.
+
+
+
+
+
+```
+
+## Multicollinearity - VIF
+
+5.  Multicollinearity - Using variance inflation factors (VIF)
+
+When testing for multicollinearity, we don't include interaction terms
+and squared terms, that means the model to be used for testing for
+multicollinearity would be model2, in which there were no variables with
+VIF\>5.
+
+First check if there were extremly high correltion between the
+predictors
+
+```{r}
+library(GGally)
+
+ggpairs(data_complete[, c("Year",
+"SHORTEST_DISTANCE_TO_LRT_METERS",
+"SHORTEST_DISTANCE_TO_POLICE_METERS",
+"male_percentage",
+"age_75_plus_percentage",
+"TotalPermits",
+"property_assessment_median",
+"canada_unemployment_rate")])
+
+
+```
+
+```{r}
+# imcdiag(model6b, method="VIF")
+imcdiag(model2, method="VIF")
+
+```
+
+## Outliers - Cook's Distance
+
+6.  Outliers - check Cook's distance and leverage
+
+```{r}
+plot (model6b, which=4) ## there was no outliers identified by Cook's distance >0.5, we can test with removing data point #304 later
+plot (model6b, which=5)
+plot (model6b, which=6)
+
+
+## leverage points
+
+lev=hatvalues(model6b)
+p = length(coef(model6b)) # 69
+n = nrow(data_complete) # 1221
+outlier2p = lev[lev>(2*p/n)]
+outlier3p = lev[lev>(3*p/n)]
+print("h_I>3p/n, outliers are")
+outlier3p
+
+# outlier2p = 2*69/1221 = 0.1130221
+# outlier3p = 3*69/1221 = 0.1695332
+
+plot(rownames(data_complete),lev, main = "Leverage in crime rate dataset", xlab="observation",
+    ylab = "Leverage Value")
+abline(h = 2 *p/n, lty = 1)
+abline(h = 3 *p/n, lty = 1)
+
+```
+
+## Fit Model 7 - Removal of Outliers
+
+Try to remove outlier3p/n and 2p/n and re-run model
+
+```{r}
+
+data_complete$lev <- hatvalues(model6b) 
+
+data_complete_out3p <- data_complete[data_complete$lev<=0.1695332,]
+data_complete_out2p <- data_complete[data_complete$lev<=0.1130221,]
+  
+```
+
+### Fit Model 7a - Removal of leverage >3p/n
+```{r}
+
+
+
+model7a <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+  
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^2)+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^3)+   
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate+
+Year*male_percentage+                                            
+Year*TotalPermits+                                                   
+Sectors*SHORTEST_DISTANCE_TO_LRT_METERS+                         
+Sectors*SHORTEST_DISTANCE_TO_POLICE_METERS+                      
+Sectors*male_percentage+                                    
+Sectors*age_75_plus_percentage+                         
+Sectors*TotalPermits+                                           
+Sectors*property_assessment_median+                                             
+SHORTEST_DISTANCE_TO_LRT_METERS*male_percentage+                  
+SHORTEST_DISTANCE_TO_LRT_METERS*age_75_plus_percentage+           
+SHORTEST_DISTANCE_TO_LRT_METERS*TotalPermits+                         
+SHORTEST_DISTANCE_TO_POLICE_METERS*property_assessment_median+                           
+male_percentage*age_75_plus_percentage+                      
+male_percentage*property_assessment_median, data_complete_out3p)
+
+summary(model7a)
+
+plot(model7a, which=1)
+plot(model7a, which=2)
+plot(model7a, which=3) # improved
+shapiro.test(residuals(model7a)) ## still not pass
+bptest(model7a)  ## still not pass
+
+
+
+```
+### Fit Model 7b - Removal of leverage >2p/n
+```{r}
+model7b <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+  
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^2)+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^3)+   
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate+
+Year*male_percentage+                                            
+Year*TotalPermits+                                                   
+Sectors*SHORTEST_DISTANCE_TO_LRT_METERS+                         
+Sectors*SHORTEST_DISTANCE_TO_POLICE_METERS+                      
+Sectors*male_percentage+                                    
+Sectors*age_75_plus_percentage+                         
+Sectors*TotalPermits+                                           
+Sectors*property_assessment_median+                                             
+SHORTEST_DISTANCE_TO_LRT_METERS*male_percentage+                  
+SHORTEST_DISTANCE_TO_LRT_METERS*age_75_plus_percentage+           
+SHORTEST_DISTANCE_TO_LRT_METERS*TotalPermits+                         
+SHORTEST_DISTANCE_TO_POLICE_METERS*property_assessment_median+                           
+male_percentage*age_75_plus_percentage+                      
+male_percentage*property_assessment_median, data_complete_out2p)
+
+summary(model7b)
+
+plot(model7b, which=1)
+plot(model7b, which=2)
+plot(model7b, which=3) # improved
+shapiro.test(residuals(model7b)) ## still not pass
+bptest(model7b)  ## still not pass
+```
+
+
+### Fit Model 7c - Removal of data point #304
+```{r}
+# review : data point #304
+```
+
+```{r}
+
+data_complete_rm304 <- data_complete[data_complete$Total_Crime_Count>1,]
+
+```
+
+
+```{r}
+model7c <- lm(ln_crime_rate ~ 
+Year+
+I(Year^2)+  
+Sectors+
+SHORTEST_DISTANCE_TO_LRT_METERS+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^2)+
+I(SHORTEST_DISTANCE_TO_LRT_METERS^3)+   
+SHORTEST_DISTANCE_TO_POLICE_METERS+
+male_percentage+
+age_75_plus_percentage+
+TotalPermits+
+property_assessment_median+
+canada_unemployment_rate+
+Year*male_percentage+                                            
+Year*TotalPermits+                                                   
+Sectors*SHORTEST_DISTANCE_TO_LRT_METERS+                         
+Sectors*SHORTEST_DISTANCE_TO_POLICE_METERS+                      
+Sectors*male_percentage+                                    
+Sectors*age_75_plus_percentage+                         
+Sectors*TotalPermits+                                           
+Sectors*property_assessment_median+                                             
+SHORTEST_DISTANCE_TO_LRT_METERS*male_percentage+                  
+SHORTEST_DISTANCE_TO_LRT_METERS*age_75_plus_percentage+           
+SHORTEST_DISTANCE_TO_LRT_METERS*TotalPermits+                         
+SHORTEST_DISTANCE_TO_POLICE_METERS*property_assessment_median+                           
+male_percentage*age_75_plus_percentage+                      
+male_percentage*property_assessment_median, data_complete_rm304)
+
+
+summary(model7c)
+plot(model7c, which=1)
+plot(model7c, which=2)
+plot(model7c, which=3)
+plot(model7c, which=4)
+plot(model7c, which=5)
+shapiro.test(residuals(model7c))
+bptest(model7c)
+
+
+```
+
+
+# Prediction Plot
+
+Use our best model, focus on Calgary Communities that will be impacted
+by the future Green LRT Line.
+
+Use the proposed Green Leg LRT Transit Station locations to update one
+of our predictor variables dataset to a new shortest LRT distance in
+meters.
+
+```{r}
+final_model<-model6b
+# New distances - in report - Appendix A explain where this set comes from - these distances reflect Green Line LRT locations so these communities now have a closer LRT location than what currently exists
+new_distances <- c(
+  SHI = 614.656, BLN = 252.401, MCT = 350.192, OGD = 882.95,
+  CRE = 80.9746, SET = 484.164, ESH = 2005.62, THO = 465.315,
+  HAR = 1159.98, TUX = 517.127, AUB = 1097.43, HIF = 377.187,
+  AYB = 474.015, HPK = 29.6261, BED = 1047, HUN = 566.373,
+  LIV = 671.398, CAR = 756.349, CHV = 638.325, RAM = 584.051,
+  DNC = 76.8825, EAU = 373.508
+)
+# Initialize a list to store data frames for each community code
+community_data <- list()
+```
+
+## Current LRT Status Prediction
+
+We will use our Regression Model and predict the Crime Rate based on our
+current dataset, for presentation and visualization, I will revert the
+Log of Crime Rate back to Crime Count.
+
+```{r}
+library(ggplot2)
+
+# Initialize the list to store data frames for each community code
+community_data <- list()
+
+# Loop through each community code in new_distances
+for (comm_code in names(new_distances)) {
+  # Filter data for the current community code
+  data_filtered <- data_complete_rm304[data_complete_rm304$COMM_CODE == comm_code, ]
+  
+  # Check if there are any rows in the filtered data
+  if (nrow(data_filtered) == 0) {
+    cat("No data available for community code:", comm_code, "\n")
+    next  # Skip to the next iteration of the loop
+  }
+
+  # Predict the values using the final_model, including confidence intervals
+  confidence_intervals <- predict(final_model, newdata = data_filtered, type = "response", se.fit = TRUE)
+  data_filtered$Predicted <- exp(confidence_intervals$fit)
+  data_filtered$Lower_CI <- exp(confidence_intervals$fit - 1.96 * confidence_intervals$se.fit)
+  data_filtered$Upper_CI <- exp(confidence_intervals$fit + 1.96 * confidence_intervals$se.fit)
+
+  # Calculate the residuals as a percentage of the actual values
+  data_filtered$Residual_Percent <- 100 * ((data_filtered$Predicted * data_filtered$Avg_Resident_Count / 100000) - data_filtered$Total_Crime_Count) / data_filtered$Total_Crime_Count
+  
+  # Calculate the average crime count from the predicted crime rate
+  avg_crime_count <- mean(data_filtered$Total_Crime_Count)
+  
+  # Create the plot for each community code
+  plot <- ggplot(data_filtered, aes(x = Year)) +
+    geom_ribbon(aes(ymin = (Lower_CI * Avg_Resident_Count / 100000), ymax = (Upper_CI * Avg_Resident_Count / 100000)), fill = "blue", alpha = 0.2) +
+    geom_point(aes(y = Total_Crime_Count), size = 2, color = "black") +
+    geom_line(aes(y = (Predicted * Avg_Resident_Count / 100000), color = "Predicted"), size = 1) +
+    geom_hline(aes(yintercept = avg_crime_count, color = "Average"), linetype = "dashed", size = 1) +
+    geom_segment(aes(x = Year, xend = Year, y = Total_Crime_Count, yend = (Predicted * Avg_Resident_Count / 100000), color = "Residual"), size = 1) +
+    geom_segment(aes(x = Year + 0.05, xend = Year + 0.05, y = (Predicted * Avg_Resident_Count / 100000), yend = avg_crime_count, color = "Regression"), linetype = "dashed", size = 1) +  # Deviation segment
+    geom_segment(aes(x = Year + 0.05, xend = Year + 0.05, y = Total_Crime_Count, yend = avg_crime_count, color = "Deviaton"), size = 1) +
+    geom_text(aes(y = Total_Crime_Count, label = paste0(round(Residual_Percent, 1), "%")), vjust = -0.8, color = "red", size = 3) +
+    scale_color_manual(name = "Legend", values = c("Predicted" = "blue", "Residual" = "red", "Average" = "purple")) +
+    labs(title = paste("Actual vs Predicted Crime Count for"),subtitle = data_filtered$Community_Name, x = "Year", y = "Total Crime Count",) + scale_color_manual(name = "Legend", values = c("Predicted" = "blue", "Residual" = "red", "Average" = "purple", "Deviaton"="green", "Regression" = "orange")) +
+    theme_minimal()
+
+  # Store the updated data_filtered in community_data under the community code
+  community_data[[comm_code]] <- data_filtered
+
+  # Print the plot
+  print(plot)
+}
+
+```
+
+## Future LRT Status Prediction
+
+We will now loop through and plot each impacted community with the new
+shortest LRT Distance given the Green Leg LRT stations exist in the
+proposed locations.
+
+```{r}
+# Loop through each community code in new_distances
+for (comm_code in names(new_distances)) {
+  # Retrieve the pre-filtered data for the current community code from community_data
+  data_filtered <- community_data[[comm_code]]
+
+  # Check if 'Year' column is missing and print the community code
+  if (!"Year" %in% names(data_filtered)) {
+    cat("The 'Year' column is missing for community code:", comm_code, "\n")
+    next  # Skip to the next iteration of the loop
+  }
+  
+  # Check if the filtered data is empty
+  if (nrow(data_filtered) == 0) {
+    cat("No data found for community code:", comm_code, "\n")
+    next  # Skip this iteration of the loop
+  }
+  
+  # Update SHORTEST_DISTANCE_TO_LRT_METERS for the current community code
+  data_filtered$SHORTEST_DISTANCE_TO_LRT_METERS <- new_distances[comm_code]
+  
+  # Calculate new predictions using the updated data, including confidence intervals
+  predictions_conf <- predict(final_model, newdata = data_filtered, interval = "confidence", type = "response")
+  data_filtered$Predicted_Updated <- exp(predictions_conf[, "fit"])
+  data_filtered$Lower_CI <- exp(predictions_conf[, "lwr"])
+  data_filtered$Upper_CI <- exp(predictions_conf[, "upr"])
+
+  # Calculate the residuals as a percentage of the actual values
+  data_filtered$Prediction_Percent <- 100 * (data_filtered$Predicted_Updated- data_filtered$Predicted)/ data_filtered$Predicted
+  
+  # Calculate the average crime count using the updated predictions
+  avg_crime_count_updated <- mean(data_filtered$Predicted_Updated * data_filtered$Avg_Resident_Count / 100000)
+  
+  # Create the plot for the current community code
+  plot_updated <- ggplot(data_filtered, aes(x = Year)) +
+    geom_ribbon(aes(ymin = Lower_CI * Avg_Resident_Count / 100000, ymax = Upper_CI * Avg_Resident_Count / 100000), fill = "blue", alpha = 0.2) +
+    geom_point(aes(y = data_filtered$Predicted* Avg_Resident_Count / 100000, color = "Previous Prediction"), size = 2) +  # Previous Prediction crime count data points
+    geom_line(aes(y = data_filtered$Predicted_Updated * Avg_Resident_Count / 100000, color = "Prediction Updated"), size = 1) +  # Line for updated predicted crime count
+    geom_hline(aes(yintercept = avg_crime_count_updated, color = "New Average"), linetype = "dashed", size = 1) +
+    geom_segment(aes(xend = Year, y = data_filtered$Predicted* Avg_Resident_Count / 100000, yend = Predicted_Updated * Avg_Resident_Count / 100000, color = "Prediction Variance"), size = 1) +
+    geom_text(aes(y = data_filtered$Predicted_Updated * Avg_Resident_Count / 100000, label = paste0(round(Prediction_Percent, 1), "%")), vjust = -0.8, color = "red", size = 3) +
+    scale_color_manual(name = "Legend", values = c("Prediction Updated" = "blue", "Prediction Variance" = "red", "New Average" = "purple", "Previous Prediction"="black")) +
+    labs(title = paste("Current Prediction vs Green Leg Predicted Crime for"),subtitle = data_filtered$Community_Name, x = "Year", y = "Total Crime Count (Updated)") +
+    theme_minimal()
+
+  # Print the updated plot
+  print(plot_updated)
+
+  # Store the updated data frame back into community_data
+  community_data[[comm_code]] <- data_filtered
+}
+
+```
